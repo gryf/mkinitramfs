@@ -12,7 +12,10 @@ import sys
 
 
 XDG_CONFIG_HOME = os.getenv('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
-CONF_PATH = os.path.join(XDG_CONFIG_HOME, 'mkinitramfs')
+XDG_DATA_HOME = os.getenv('XDG_DATA_HOME',
+                          os.path.expanduser('~/.local/share'))
+CONF_PATH = os.path.join(XDG_CONFIG_HOME, 'mkinitramfs.json')
+KEYS_PATH = os.path.join(XDG_DATA_HOME, 'keys')
 SHEBANG = "#!/bin/bash\n"
 SHEBANG_ASH = "#!/bin/sh\n"
 DEPS = """
@@ -276,12 +279,12 @@ def _disks_msg():
                      '       "key": "key-filename"\n'
                      '   },\n'
                      '   ...\n'
-                     '}\n' % os.path.join(CONF_PATH, 'disks.json'))
+                     '}\n' % CONF_PATH)
 
 
 def _load_disks():
     try:
-        with open(os.path.join(CONF_PATH, 'disks.json')) as fobj:
+        with open(CONF_PATH) as fobj:
             return json.load(fobj)
     except IOError:
         _disks_msg()
@@ -307,8 +310,7 @@ def main():
     parser.add_argument('-m', '--copy-modules', action='store_true',
                         help='Copy kernel modules into initramfs image.')
     parser.add_argument('-k', '--key-path', help='path to the location where '
-                        'keys are stored',
-                        default=os.path.join(CONF_PATH, 'keys'))
+                        'keys are stored', default=KEYS_PATH)
     parser.add_argument('-l', '--lvm', action='store_true',
                         help='Enable LVM in init.')
     parser.add_argument('disk', choices=disks.keys(), help='Disk name')
