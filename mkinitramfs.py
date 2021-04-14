@@ -3,12 +3,12 @@
 Python2/3 compatible initrd generatin script
 """
 import argparse
-import tempfile
+import json
 import os
 import shutil
 import subprocess
-import json
 import sys
+import tempfile
 
 
 XDG_CONFIG_HOME = os.getenv('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
