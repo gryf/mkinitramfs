@@ -36,6 +36,11 @@ for bin in ${DEPS[*]}; do
         mkdir -p .${lib%/*} && cp {,.}$lib
     done
 done
+# extra lib for new version of cryptsetup, which need to do locks
+for path in $(find /usr/lib/gcc|grep libgcc_s.so.1); do
+    [ "$(basename $(dirname $path))" = '32' ] && continue
+    cp $path lib/
+done
 """
 COPY_MODULES = """
 KERNEL=$(readlink /usr/src/linux)
@@ -142,8 +147,9 @@ class Initramfs(object):
 
     def _make_dirs(self):
         os.chdir(self.dirname)
-        for dir_ in "bin dev etc keys lib64 proc sys tmp usr".split():
-            os.mkdir(os.path.join(self.dirname, dir_))
+        for dir_ in ("bin", "dev", "etc", "keys", "lib64", "proc",
+                     "run/cryptsetup", "sys", "tmp", "usr"):
+            os.makedirs(os.path.join(self.dirname, dir_))
 
         for link, target in (('lib', 'lib64'), ('sbin', 'bin'),
                              ('linuxrc', 'bin/busybox')):
