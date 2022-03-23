@@ -161,7 +161,7 @@ done
 if [ -z "${DEVICE}" ]; then
     echo "No LUKS device found to boot from! Giving up."
     sleep 3
-    poweroff -f
+    reboot -f
 fi
 
 ret=1
