@@ -366,7 +366,7 @@ class Initramfs(object):
         self._copy_modules()
         # self._copy_wlan_modules()
         self._populate_busybox()
-        if self._args.no_key:
+        if not self._args.no_key:
             self._copy_key()
         self._generate_init()
         self._mkcpio_arch()
