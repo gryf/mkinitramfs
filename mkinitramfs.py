@@ -26,6 +26,9 @@ DEPS=(
 %(lvm)s
 )
 """
+# /usr/sbin/dropbear
+# /usr/bin/dropbearkey
+# /usr/sbin/wpa_supplicant
 COPY_DEPS = """
 for bin in ${DEPS[*]}; do
     cp $bin ./bin/
@@ -131,12 +134,8 @@ exec switch_root /new-root /sbin/init
 
 class Initramfs(object):
     def __init__(self, args, disks):
-        self.lvm = args.lvm
-        self.install = args.install
-        self.disk_name = args.disk
+        self._args = args
         self.dirname = None
-        self.copymodules = args.copy_modules
-        self.key_path = args.key_path
         self.kernel_ver = os.readlink('/usr/src/linux').replace('linux-', '')
         self._make_tmp()
         self._disks = disks
@@ -147,8 +146,8 @@ class Initramfs(object):
 
     def _make_dirs(self):
         os.chdir(self.dirname)
-        for dir_ in ("bin", "dev", "etc", "keys", "lib64", "proc",
-                     "run/cryptsetup", "sys", "tmp", "usr"):
+        for dir_ in ('bin', 'dev', 'etc', 'keys', 'lib64', 'proc',
+                     'run/cryptsetup', 'run/lock', 'sys', 'tmp', 'usr'):
             os.makedirs(os.path.join(self.dirname, dir_))
 
         for link, target in (('lib', 'lib64'), ('sbin', 'bin'),
@@ -157,14 +156,25 @@ class Initramfs(object):
         os.chdir(self.curdir)
 
     def _copy_deps(self):
+        additional_libs = ['libgcc_s']
         os.chdir(self.dirname)
-        fd, fname = tempfile.mkstemp(dir=self.dirname, suffix='.sh')
-        os.close(fd)
+        _fd, fname = tempfile.mkstemp(dir=self.dirname, suffix='.sh')
+        os.close(_fd)
         with open(fname, 'w') as fobj:
-            lvm = '/sbin/lvscan\n/sbin/vgchange' if self.lvm else ''
+            lvm = '/sbin/lvscan\n/sbin/vgchange' if self._args.lvm else ''
             fobj.write(SHEBANG)
             fobj.write(DEPS % {'lvm': lvm})
             fobj.write(COPY_DEPS)
+
+        # extra crap, which seems to be needed, but is not direct dependency
+        for root, _, fnames in os.walk('/usr/lib'):
+            if '32' in root:
+                continue
+
+            for f in fnames:
+                if f.split('.')[0] in additional_libs:
+                    shutil.copy(os.path.join(root, f), 'lib64',
+                                follow_symlinks=False)
 
         os.chmod(fname, 0b111101101)
         subprocess.call([fname])
@@ -172,7 +182,7 @@ class Initramfs(object):
         os.chdir(self.curdir)
 
     def _copy_modules(self):
-        if not self.copymodules:
+        if not self._args.copy_modules:
             return
         os.chdir(self.dirname)
         os.mkdir(os.path.join('lib', 'modules'))
@@ -190,14 +200,15 @@ class Initramfs(object):
             os.symlink('busybox', command)
 
     def _copy_key(self):
-        key_path = self._disks[self.disk_name]['key']
+        key_path = self._disks[self._args.disk]['key']
         if not os.path.exists(key_path):
-            key_path = os.path.join(self.key_path,
-                                    self._disks[self.disk_name]['key'])
+            key_path = os.path.join(self._args.key_path,
+                                    self._disks[self._args.disk]['key'])
 
         if not os.path.exists(key_path):
             self._cleanup()
-            sys.stderr.write('Cannot find key file for %s.\n' % self.disk_name)
+            sys.stderr.write('Cannot find key file for %s.\n' %
+                             self._args.disk)
             sys.exit(2)
 
         key_path = os.path.abspath(key_path)
@@ -209,17 +220,17 @@ class Initramfs(object):
         os.chdir(self.dirname)
         with open('init', 'w') as fobj:
             fobj.write(SHEBANG_ASH)
-            fobj.write("UUID='%s'\n" % self._disks[self.disk_name]['uuid'])
-            fobj.write("KEY='/keys/%s'\n" % self._disks[self.disk_name]['key'])
+            fobj.write(f"UUID='{self._disks[self._args.disk]['uuid']}'\n")
+            fobj.write(f"KEY='/keys/{self._disks[self._args.disk]['key']}'\n")
             fobj.write(INIT)
         os.chmod('init', 0b111101101)
         os.chdir(self.curdir)
 
     def _mkcpio_arch(self):
-        fd, self.cpio_arch = tempfile.mkstemp(suffix='.cpio')
-        os.close(fd)
-        fd, scriptname = tempfile.mkstemp(suffix='.sh')
-        os.close(fd)
+        _fd, self.cpio_arch = tempfile.mkstemp(suffix='.cpio')
+        os.close(_fd)
+        _fd, scriptname = tempfile.mkstemp(suffix='.sh')
+        os.close(_fd)
         os.chdir(self.dirname)
         with open(scriptname, 'w') as fobj:
             fobj.write(SHEBANG)
@@ -231,7 +242,7 @@ class Initramfs(object):
 
         os.chmod(self.cpio_arch, 0b110100100)
 
-        if self.install:
+        if self._args.install:
             self._make_boot_links()
         else:
             shutil.move(self.cpio_arch, 'initramfs.cpio')
