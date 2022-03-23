@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Python2/3 compatible initrd generatin script
+Python2/3 compatible initrd generating script
 """
 import argparse
 import json
@@ -54,6 +54,7 @@ find . -print0 | cpio --quiet --null -o -H newc | \\
     gzip > %(arch)s
 exit $?
 """
+
 INIT = """
 DEVICE=''
 
@@ -104,8 +105,7 @@ done
 if [ -z "${DEVICE}" ]; then
     echo "No LUKS device found to boot from! Giving up."
     sleep 3
-    poweroff
-    exit
+    poweroff -f
 fi
 
 for i in 0 1 2 ; do
