@@ -165,13 +165,19 @@ if [ -z "${DEVICE}" ]; then
 fi
 
 ret=1
-if [ -n ${KEYDEV} -eq 1 ]; then
+if [ -n ${KEYDEV} ]; then
     for i in 0 1 2 ; do
         dd if=${KEYDEV} skip=31337 count=8 2>/dev/null | \
                 cryptsetup open --allow-discards $DEVICE root
         ret=$?
         [ ${ret} -eq 0 ] && break
     done
+fi
+
+if [[ ${ret} -ne 0 && ! -f ${KEY} ]]; then
+    echo "Failed to open boot system fs. Giving up."
+    sleep 3
+    reboot -f
 fi
 
 if [[ -z "${KEYDEV}" || ${ret} -ne 0 ]]; then
