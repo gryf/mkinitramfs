@@ -60,6 +60,7 @@ exit $?
 
 INIT = """
 DEVICE=''
+KEYDEV=''
 
 clear
 export PATH=/bin
@@ -81,7 +82,10 @@ exec >/dev/console </dev/console 2>&1
 mv /dev/tty /dev/tty_bak
 ln -s /dev/console /dev/tty
 
-# open shell
+"""
+
+# check for 'rescue' keyword if there should be shell requested
+INIT_CMD = """
 CMD=`cat /proc/cmdline`
 
 for param in $CMD; do
@@ -89,8 +93,57 @@ for param in $CMD; do
         exec /bin/sh
     fi
 done
+"""
 
-# open encrypted root
+# optional: search for the SD/MMC card, and use it's first partition. The idea
+# is to have something which one *own* rather that something that one *know*.
+# To prepare SD card (or pendrive, procedure is the same), create partition,
+# at least 32MB on dos partition table, format it, write something (possibly
+# some images/videoclips), create a key 4096 bytes long, and write it down
+# using:
+#
+# dd if=keyfile of=/dev/mmcblk0p1 seek=31337 count=8
+#
+# or, for pendrive:
+#
+# dd if=keyfile of=/dev/sdX1 seek=31337 count=8
+#
+# be carefull, which disk you select to write.
+INIT_SD = """
+for counter in $(seq 5); do
+    clear
+    if [ -b /dev/mmcblk0p1 ]; then
+        KEYDEV=/dev/mmcblk0p1
+        break
+    fi
+    sleep 1
+done
+"""
+
+# optional: search for the labeled device - assuming it will be usb stick with
+# one of the partition set with label (e2label, mlabel). for vfat partition
+# labels, mlabel have weird format to set it:
+#
+# mlabel -v -i /dev/sdx1 -s ::foobar
+#
+# note, that label will always be uppercase, so that case sensitiv check is
+# off.
+INIT_LABELED = """
+for counter in $(seq 3); do
+    sleep 1
+    clear
+    for dev in /dev/sd* /dev/mmcblk*; do
+        if blkid "${dev}" | grep -q LABEL | grep -iqw "%(label)s"; then
+            KEYDEV="${dev}"
+            break
+        fi
+    done
+    [ -n "${KEYDEV}" ] && break
+done
+"""
+
+# Open encrypted fs
+INIT_OPEN = """
 for counter in $(seq 3); do
     sleep 1
     clear
@@ -111,11 +164,23 @@ if [ -z "${DEVICE}" ]; then
     poweroff -f
 fi
 
-for i in 0 1 2 ; do
-    ccrypt -c $KEY | cryptsetup open --allow-discards $DEVICE root
-    ret=$?
-    [ ${ret} -eq 0 ] && break
-done
+ret=1
+if [ -n ${KEYDEV} -eq 1 ]; then
+    for i in 0 1 2 ; do
+        dd if=${KEYDEV} skip=31337 count=8 2>/dev/null | \
+                cryptsetup open --allow-discards $DEVICE root
+        ret=$?
+        [ ${ret} -eq 0 ] && break
+    done
+fi
+
+if [[ -z "${KEYDEV}" || ${ret} -ne 0 ]]; then
+    for i in 0 1 2 ; do
+        ccrypt -c $KEY | cryptsetup open --allow-discards $DEVICE root
+        ret=$?
+        [ ${ret} -eq 0 ] && break
+    done
+fi
 
 # get the tty back
 rm /dev/tty
@@ -236,6 +301,12 @@ class Initramfs(object):
             fobj.write(f"UUID='{self._disks[self._args.disk]['uuid']}'\n")
             fobj.write(f"KEY='/keys/{self._disks[self._args.disk]['key']}'\n")
             fobj.write(INIT)
+            fobj.write(INIT_CMD)
+            if self._args.disk_label:
+                fobj.write(INIT_LABELED % {'label': self._args.disk_label})
+            else:
+                fobj.write(INIT_SD)
+            fobj.write(INIT_OPEN)
         os.chmod('init', 0b111101101)
         os.chdir(self.curdir)
 
@@ -347,6 +418,9 @@ def main():
                         'encrypted root.')
     parser.add_argument('-k', '--key-path', help='path to the location where '
                         'keys are stored', default=KEYS_PATH)
+    parser.add_argument('-d', '--disk-label', help='Provide disk label '
+                        'instead of assumed first partition on hardcoded SD '
+                        'card reader')
     parser.add_argument('-l', '--lvm', action='store_true',
                         help='Enable LVM in init.')
     parser.add_argument('disk', choices=disks.keys(), help='Disk name')
