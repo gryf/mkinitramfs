@@ -191,6 +191,19 @@ class Initramfs(object):
                         self.kernel_ver, symlinks=True)
         os.chdir(self.curdir)
 
+    def _copy_wlan_modules(self):
+        path = ('lib/modules/' + self.kernel_ver +
+                '/kernel/drivers/net/wireless/intel/iwlwifi')
+        os.chdir(self.dirname)
+        os.makedirs(os.path.join(path, 'dvm'))
+        os.makedirs(os.path.join(path, 'mvm'), exist_ok=True)
+        shutil.copy2(os.path.join('/', path, 'dvm', 'iwldvm.ko'),
+                     os.path.join(path, 'dvm'))
+        shutil.copy2(os.path.join('/', path, 'mvm', 'iwlmvm.ko'),
+                     os.path.join(path, 'mvm'))
+        shutil.copy2(os.path.join('/', path, 'iwlwifi.ko'), path)
+        os.chdir(self.curdir)
+
     def _populate_busybox(self):
         os.chdir(os.path.join(self.dirname, 'bin'))
         output = subprocess.check_output(['busybox', '--list']).decode('utf-8')
@@ -280,6 +293,7 @@ class Initramfs(object):
         self._make_dirs()
         self._copy_deps()
         self._copy_modules()
+        # self._copy_wlan_modules()
         self._populate_busybox()
         self._copy_key()
         self._generate_init()
