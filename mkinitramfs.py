@@ -295,7 +295,8 @@ class Initramfs(object):
         self._copy_modules()
         # self._copy_wlan_modules()
         self._populate_busybox()
-        self._copy_key()
+        if self._args.no_key:
+            self._copy_key()
         self._generate_init()
         self._mkcpio_arch()
         self._cleanup()
@@ -340,6 +341,10 @@ def main():
                         'initramfs will be generated in current directory.')
     parser.add_argument('-m', '--copy-modules', action='store_true',
                         help='Copy kernel modules into initramfs image.')
+    parser.add_argument('-n', '--no-key', action='store_true',
+                        help='Do not copy key file to the initramfs - '
+                        'assuming SD card/usb stick is the only way to open '
+                        'encrypted root.')
     parser.add_argument('-k', '--key-path', help='path to the location where '
                         'keys are stored', default=KEYS_PATH)
     parser.add_argument('-l', '--lvm', action='store_true',
