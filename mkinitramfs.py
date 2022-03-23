@@ -133,7 +133,7 @@ for counter in $(seq 3); do
     sleep 1
     clear
     for dev in /dev/sd* /dev/mmcblk*; do
-        if blkid "${dev}" | grep -q LABEL | grep -iqw "%(label)s"; then
+        if blkid "${dev}" | grep -w LABEL | grep -iqw "%(label)s"; then
             KEYDEV="${dev}"
             break
         fi
