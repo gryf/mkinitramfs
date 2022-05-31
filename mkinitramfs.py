@@ -61,8 +61,9 @@ exit $?
 INIT = """
 DEVICE=''
 KEYDEV=''
+CLEAR=clear
 
-clear
+$CLEAR
 export PATH=/bin
 umask 0077
 
@@ -91,6 +92,9 @@ CMD=`cat /proc/cmdline`
 for param in $CMD; do
     if [ "${param}" == "rescue" ]; then
         exec /bin/sh
+    elif [ "${param}" == "dbg" ]; then
+        set -x
+        CLEAR=''
     fi
 done
 """
@@ -146,7 +150,7 @@ done
 INIT_OPEN = """
 for counter in $(seq 3); do
     sleep 1
-    clear
+    $CLEAR
     for dev in /dev/sd* /dev/nvme*; do
         if cryptsetup isLuks ${dev}; then
             if [ $(cryptsetup luksUUID ${dev}) = "${UUID}" ]; then
