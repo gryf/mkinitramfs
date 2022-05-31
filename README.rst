@@ -62,5 +62,13 @@ Usage
   on ``/boot`` with appropriate links. Note, that old images (they have
   ``.old`` suffix in the filename) will be removed in that case.
 
+Using key devices
+-----------------
+
+It is possible to use an SD card (if computer does have reader built-in) or old
+plain USB pendrive. Currently support for the keys is limited to 4096 bytes,
+and assumption that key is unencrypted - it helps with booting system
+non-interactively.
+
 .. _ccrypt: https://sourceforge.net/projects/ccrypt/
 .. _cryptsetup: https://gitlab.com/cryptsetup/cryptsetup/blob/master/README.md

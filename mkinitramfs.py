@@ -314,7 +314,7 @@ class Initramfs(object):
             fobj.write(INIT_CMD)
             if self._args.disk_label:
                 fobj.write(INIT_LABELED % {'label': self._args.disk_label})
-            else:
+            if self._args.sdcard:
                 fobj.write(INIT_SD)
             fobj.write(INIT_OPEN)
         os.chmod('init', 0b111101101)
@@ -429,8 +429,9 @@ def main():
     parser.add_argument('-k', '--key-path', help='path to the location where '
                         'keys are stored', default=KEYS_PATH)
     parser.add_argument('-d', '--disk-label', help='Provide disk label '
-                        'instead of assumed first partition on hardcoded SD '
-                        'card reader')
+                        'to be read decritpion key from.')
+    parser.add_argument('-s', '--sdcard', help='Use built in sdcard reader to '
+                        'read from (hopefully) inserted card')
     parser.add_argument('-l', '--lvm', action='store_true',
                         help='Enable LVM in init.')
     parser.add_argument('disk', choices=disks.keys(), help='Disk name')
