@@ -70,5 +70,14 @@ plain USB pendrive. Currently support for the keys is limited to 4096 bytes,
 and assumption that key is unencrypted - it helps with booting system
 non-interactively.
 
+Yubikey
+-------
+
+There is possibility for using key which is encrypted using response from
+challenge response using `ykchalresp`_ command. The challenge here could be
+any string, so the name of the device from config is used.
+
+
 .. _ccrypt: https://sourceforge.net/projects/ccrypt/
 .. _cryptsetup: https://gitlab.com/cryptsetup/cryptsetup/blob/master/README.md
+.. _ykchalresp: https://github.com/Yubico/yubikey-personalization

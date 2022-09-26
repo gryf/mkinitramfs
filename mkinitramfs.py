@@ -24,6 +24,7 @@ DEPS=(
 /usr/bin/ccrypt
 /sbin/cryptsetup
 %(lvm)s
+%(yubikey)s
 )
 """
 # /usr/sbin/dropbear
@@ -187,8 +188,21 @@ if [[ ${ret} -ne 0 && ! -f ${KEY} ]]; then
 fi
 """
 
+DECRYPT_YUBICP = """
+for i in 1 2 3 4 5 6; do
+    pass=$(ykchalresp %(disk)s 2>/dev/null)
+    if [ -n "$pass" ]; then
+        ccrypt -K $pass -c "$KEY.yk" | \
+                cryptsetup open --allow-discards $DEVICE root
+        break
+    fi
+    sleep .5
+done
+
+"""
+
 DECRYPT_PASSWORD = """
-if [[ -z "${KEYDEV}" || ${ret} -ne 0 ]]; then
+if [ ! -b /dev/mapper/root ]; then
     for i in 0 1 2 ; do
         ccrypt -c $KEY | cryptsetup open --allow-discards $DEVICE root
         ret=$?
@@ -215,7 +229,16 @@ exec switch_root /new-root /sbin/init
 
 class Initramfs(object):
     def __init__(self, args, disks):
-        self._args = args
+        self.lvm = args.lvm
+        self.yk = args.yubikey
+        self.name = args.disk
+        self.modules = args.copy_modules
+        self.key_path = args.key_path
+        self.disk_label = args.disk_label
+        self.sdcard = args.sdcard
+        self.install = args.install
+        self.no_key = args.no_key
+
         self.dirname = None
         self.kernel_ver = os.readlink('/usr/src/linux').replace('linux-', '')
         self._make_tmp()
@@ -242,9 +265,10 @@ class Initramfs(object):
         _fd, fname = tempfile.mkstemp(dir=self.dirname, suffix='.sh')
         os.close(_fd)
         with open(fname, 'w') as fobj:
-            lvm = '/sbin/lvscan\n/sbin/vgchange' if self._args.lvm else ''
+            lvm = '/sbin/lvscan\n/sbin/vgchange' if self.lvm else ''
+            yubikey = '/usr/bin/ykchalresp' if self.yk else ''
             fobj.write(SHEBANG)
-            fobj.write(DEPS % {'lvm': lvm})
+            fobj.write(DEPS % {'lvm': lvm, 'yubikey': yubikey})
             fobj.write(COPY_DEPS)
 
         # extra crap, which seems to be needed, but is not direct dependency
@@ -263,7 +287,7 @@ class Initramfs(object):
         os.chdir(self.curdir)
 
     def _copy_modules(self):
-        if not self._args.copy_modules:
+        if not self.modules:
             return
         os.chdir(self.dirname)
         os.mkdir(os.path.join('lib', 'modules'))
@@ -293,16 +317,15 @@ class Initramfs(object):
                 continue
             os.symlink('busybox', command)
 
-    def _copy_key(self):
-        key_path = self._disks[self._args.disk]['key']
+    def _copy_key(self, suffix=''):
+        key_path = self._disks[self.name]['key'] + suffix
         if not os.path.exists(key_path):
-            key_path = os.path.join(self._args.key_path,
-                                    self._disks[self._args.disk]['key'])
+            key_path = os.path.join(self.key_path,
+                                    self._disks[self.name]['key'] + suffix)
 
         if not os.path.exists(key_path):
             self._cleanup()
-            sys.stderr.write('Cannot find key file for %s.\n' %
-                             self._args.disk)
+            sys.stderr.write(f'Cannot find key(s) file for {self.name}.\n')
             sys.exit(2)
 
         key_path = os.path.abspath(key_path)
@@ -314,19 +337,22 @@ class Initramfs(object):
         os.chdir(self.dirname)
         with open('init', 'w') as fobj:
             fobj.write(SHEBANG_ASH)
-            fobj.write(f"UUID='{self._disks[self._args.disk]['uuid']}'\n")
-            fobj.write(f"KEY='/keys/{self._disks[self._args.disk]['key']}'\n")
+            fobj.write(f"UUID='{self._disks[self.name]['uuid']}'\n")
+            fobj.write(f"KEY='/keys/{self._disks[self.name]['key']}'\n")
             fobj.write(INIT)
             fobj.write(INIT_CMD)
-            if self._args.disk_label:
-                fobj.write(INIT_LABELED % {'label': self._args.disk_label})
-            if self._args.sdcard:
+            if self.disk_label:
+                fobj.write(INIT_LABELED % {'label': self.disk_label})
+            if self.sdcard:
                 fobj.write(INIT_SD)
             fobj.write(INIT_OPEN)
-            if self._args.disk_label or self._args.sdcard:
+            if self.disk_label or self.sdcard:
                 fobj.write(DECRYPT_KEYDEV)
+            if self.yk:
+                fobj.write(DECRYPT_YUBICP % {'disk': self.name})
             fobj.write(DECRYPT_PASSWORD)
             fobj.write(SWROOT)
+
         os.chmod('init', 0b111101101)
         os.chdir(self.curdir)
 
@@ -346,7 +372,7 @@ class Initramfs(object):
 
         os.chmod(self.cpio_arch, 0b110100100)
 
-        if self._args.install:
+        if self.install:
             self._make_boot_links()
         else:
             shutil.move(self.cpio_arch, 'initramfs.cpio')
@@ -386,8 +412,10 @@ class Initramfs(object):
         self._copy_modules()
         # self._copy_wlan_modules()
         self._populate_busybox()
-        if not self._args.no_key:
+        if not self.no_key:
             self._copy_key()
+        if self.yk:
+            self._copy_key('.yk')
         self._generate_init()
         self._mkcpio_arch()
         self._cleanup()
@@ -439,11 +467,13 @@ def main():
     parser.add_argument('-k', '--key-path', help='path to the location where '
                         'keys are stored', default=KEYS_PATH)
     parser.add_argument('-d', '--disk-label', help='Provide disk label '
-                        'to be read decritpion key from.')
+                        'to be read decription key from.')
     parser.add_argument('-s', '--sdcard', help='Use built in sdcard reader to '
                         'read from (hopefully) inserted card')
     parser.add_argument('-l', '--lvm', action='store_true',
                         help='Enable LVM in init.')
+    parser.add_argument('-y', '--yubikey', action='store_true',
+                        help='Enable Yubikey challenge-response in init.')
     parser.add_argument('disk', choices=disks.keys(), help='Disk name')
 
     args = parser.parse_args()
