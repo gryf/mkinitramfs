@@ -165,9 +165,11 @@ done
 if [ -z "${DEVICE}" ]; then
     echo "No LUKS device found to boot from! Giving up."
     sleep 3
-    reboot -f
+    exec reboot -f
 fi
+"""
 
+DECRYPT_KEYDEV = """
 ret=1
 if [ -n ${KEYDEV} ]; then
     for i in 0 1 2 ; do
@@ -183,7 +185,9 @@ if [[ ${ret} -ne 0 && ! -f ${KEY} ]]; then
     sleep 3
     reboot -f
 fi
+"""
 
+DECRYPT_PASSWORD = """
 if [[ -z "${KEYDEV}" || ${ret} -ne 0 ]]; then
     for i in 0 1 2 ; do
         ccrypt -c $KEY | cryptsetup open --allow-discards $DEVICE root
@@ -191,7 +195,9 @@ if [[ -z "${KEYDEV}" || ${ret} -ne 0 ]]; then
         [ ${ret} -eq 0 ] && break
     done
 fi
+"""
 
+SWROOT = """
 # get the tty back
 rm /dev/tty
 mv /dev/tty_bak /dev/tty
@@ -317,6 +323,10 @@ class Initramfs(object):
             if self._args.sdcard:
                 fobj.write(INIT_SD)
             fobj.write(INIT_OPEN)
+            if self._args.disk_label or self._args.sdcard:
+                fobj.write(DECRYPT_KEYDEV)
+            fobj.write(DECRYPT_PASSWORD)
+            fobj.write(SWROOT)
         os.chmod('init', 0b111101101)
         os.chdir(self.curdir)
 
