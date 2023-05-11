@@ -37,7 +37,7 @@ for bin in ${DEPS[*]}; do
     for lib in $(ldd $bin | sed -nre 's,.* (/.*lib.*/.*.so.*) .*,\\1,p' \\
         -e 's,.*(/lib.*/ld.*.so.*) .*,\\1,p')
     do
-        mkdir -p .${lib%/*} && cp {,.}$lib
+        cp $lib lib64/
     done
 done
 # extra lib for new version of cryptsetup, which need to do locks
@@ -251,7 +251,7 @@ class Initramfs(object):
     def _make_dirs(self):
         os.chdir(self.dirname)
         for dir_ in ('bin', 'dev', 'etc', 'keys', 'lib64', 'proc',
-                     'run/cryptsetup', 'run/lock', 'sys', 'tmp', 'usr'):
+                     'run/cryptsetup', 'run/lock', 'sys', 'tmp'):
             os.makedirs(os.path.join(self.dirname, dir_))
 
         for link, target in (('lib', 'lib64'), ('sbin', 'bin'),
