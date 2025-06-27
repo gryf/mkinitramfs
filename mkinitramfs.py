@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 """
-Python2/3 compatible initrd generating script
+Python initrd generating script
 """
 import argparse
-import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 
 XDG_CONFIG_HOME = os.getenv('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
 XDG_DATA_HOME = os.getenv('XDG_DATA_HOME',
                           os.path.expanduser('~/.local/share'))
-CONF_PATH = os.path.join(XDG_CONFIG_HOME, 'mkinitramfs.json')
+CONF_PATH = os.path.join(XDG_CONFIG_HOME, 'mkinitramfs.toml')
 KEYS_PATH = os.path.join(XDG_DATA_HOME, 'keys')
 SHEBANG = "#!/bin/bash\n"
 SHEBANG_ASH = "#!/bin/sh\n"
@@ -227,22 +227,61 @@ exec switch_root /new-root /sbin/init
 """
 
 
+class Config:
+    defaults = {'copy_modules': False,
+                'disk_label': None,
+                'install': False,
+                'key_path': None,
+                'lvm': False,
+                'no_key': False,
+                'sdcard': None,
+                'yubikey': False}
+
+    def __init__(self, args, toml_conf):
+        self.drive = args.get('drive')
+        toml_ = toml_conf[self.drive]
+
+        for k, v in self.defaults.items():
+            setattr(self, k, toml_.get(k, v))
+            if getattr(self, k) is not args.get(k) and args.get(k) is not None:
+                setattr(self, k, args[k])
+
+        key = None
+        if not self.key_path and toml_.get('key'):
+            key = toml_.get('key')
+            if not os.path.exists(key):
+                key = os.path.join(KEYS_PATH, key)
+            if not os.path.exists(key):
+                sys.stderr.write(f'Cannot find key file for '
+                                 '{toml_.get("key")}.\n')
+                sys.exit(2)
+            self.key_path = key
+
+        if not (self.key_path or self.no_key):
+            sys.stderr.write(f'key file for {self.drive} is not provided, '
+                             'while no-key option is not set.\n')
+            sys.exit(2)
+
+        # UUID is only available via config file
+        self.uuid = toml_.get('uuid')
+
+
 class Initramfs(object):
-    def __init__(self, args, disks):
-        self.lvm = args.lvm
-        self.yk = args.yubikey
+    def __init__(self, conf):
+        self.lvm = conf.lvm
+        self.yk = conf.yubikey
         self.name = args.disk
-        self.modules = args.copy_modules
-        self.key_path = args.key_path
-        self.disk_label = args.disk_label
-        self.sdcard = args.sdcard
-        self.install = args.install
-        self.no_key = args.no_key
+        self.modules = conf.copy_modules
+        self.key_path = conf.key_path
+        self.disk_label = conf.disk_label
+        self.sdcard = conf.sdcard
+        self.install = conf.install
+        self.no_key = conf.no_key
 
         self.dirname = None
         self.kernel_ver = os.readlink('/usr/src/linux').replace('linux-', '')
         self._make_tmp()
-        self._disks = disks
+        self._disks = conf.drive
 
     def _make_tmp(self):
         self.dirname = tempfile.mkdtemp(prefix='init_')
@@ -318,14 +357,13 @@ class Initramfs(object):
             os.symlink('busybox', command)
 
     def _copy_key(self, suffix=''):
-        key_path = self._disks[self.name]['key'] + suffix
+        key_path = self.key_path
         if not os.path.exists(key_path):
-            key_path = os.path.join(self.key_path,
-                                    self._disks[self.name]['key'] + suffix)
+            key_path = os.path.join(self.key_path + suffix)
 
         if not os.path.exists(key_path):
             self._cleanup()
-            sys.stderr.write(f'Cannot find key(s) file for {self.name}.\n')
+            sys.stderr.write(f'Cannot find key(s) file for {self._drive}.\n')
             sys.exit(2)
 
         key_path = os.path.abspath(key_path)
@@ -337,8 +375,9 @@ class Initramfs(object):
         os.chdir(self.dirname)
         with open('init', 'w') as fobj:
             fobj.write(SHEBANG_ASH)
-            fobj.write(f"UUID='{self._disks[self.name]['uuid']}'\n")
-            fobj.write(f"KEY='/keys/{self._disks[self.name]['key']}'\n")
+            fobj.write(f"UUID='{self.uuid}'\n")
+            if self.key:
+                fobj.write(f"KEY='/keys/{self.key}'\n")
             fobj.write(INIT)
             fobj.write(INIT_CMD)
             if self.disk_label:
@@ -349,7 +388,7 @@ class Initramfs(object):
             if self.disk_label or self.sdcard:
                 fobj.write(DECRYPT_KEYDEV)
             if self.yk:
-                fobj.write(DECRYPT_YUBICP % {'disk': self.name})
+                fobj.write(DECRYPT_YUBICP % {'disk': self._drive})
             fobj.write(DECRYPT_PASSWORD)
             fobj.write(SWROOT)
 
@@ -421,22 +460,22 @@ class Initramfs(object):
         self._cleanup()
 
 
-def _disks_msg():
-    sys.stdout.write('You need to create %s json file with the '
-                     'contents:\n\n'
-                     '{\n'
-                     '   "name": {\n'
-                     '       "uuid": "disk-uuid",\n'
-                     '       "key": "key-filename"\n'
-                     '   },\n'
-                     '   ...\n'
-                     '}\n' % CONF_PATH)
+def _disks_msg(msg=None):
+    if not msg:
+        sys.stdout.write('You need to create %s toml file with the '
+                         'contents:\n\n'
+                         '[name]\n'
+                         'uuid = "disk-uuid"\n'
+                         'key = "key-filename"\n'
+                         '...\n' % CONF_PATH)
+    else:
+        sys.stdout.write(msg + '\n')
 
 
 def _load_disks():
     try:
-        with open(CONF_PATH) as fobj:
-            return json.load(fobj)
+        with open(CONF_PATH, 'rb') as fobj:
+            return tomllib.load(fobj)
     except IOError:
         _disks_msg()
         sys.exit(1)
@@ -465,7 +504,7 @@ def main():
                         'assuming SD card/usb stick is the only way to open '
                         'encrypted root.')
     parser.add_argument('-k', '--key-path', help='path to the location where '
-                        'keys are stored', default=KEYS_PATH)
+                        'keys are stored')
     parser.add_argument('-d', '--disk-label', help='Provide disk label '
                         'to be read decription key from.')
     parser.add_argument('-s', '--sdcard', help='Use built in sdcard reader to '
@@ -474,10 +513,14 @@ def main():
                         help='Enable LVM in init.')
     parser.add_argument('-y', '--yubikey', action='store_true',
                         help='Enable Yubikey challenge-response in init.')
-    parser.add_argument('disk', choices=disks.keys(), help='Disk name')
+    parser.add_argument('drive', choices=disks.keys(), help='Drive name')
 
     args = parser.parse_args()
-    init = Initramfs(args, disks)
+    if args.drive not in disks:
+        _disks_msg(f'Drive {args.drive} not found in configuration')
+        sys.exit(4)
+    conf = Config(args.__dict__, disks)
+    init = Initramfs(conf)
     init.build()
 
 
