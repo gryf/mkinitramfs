@@ -16,6 +16,7 @@ XDG_DATA_HOME = os.getenv('XDG_DATA_HOME',
                           os.path.expanduser('~/.local/share'))
 CONF_PATH = os.path.join(XDG_CONFIG_HOME, 'mkinitramfs.toml')
 KEYS_PATH = os.path.join(XDG_DATA_HOME, 'keys')
+ROOT_AK = '/root/.ssh/authorized_keys'
 SHEBANG = "#!/bin/bash\n"
 SHEBANG_ASH = "#!/bin/sh\n"
 DEPS = """
@@ -25,6 +26,7 @@ DEPS=(
 /sbin/cryptsetup
 %(lvm)s
 %(yubikey)s
+%(dropbear)s
 )
 """
 # /usr/sbin/dropbear
@@ -45,6 +47,15 @@ for path in $(find /usr/lib/gcc|grep libgcc_s.so.1); do
     [ "$(basename $(dirname $path))" = '32' ] && continue
     cp $path lib/
 done
+
+if %s; then
+    if [ ! -f ~/.cache/askpass ]; then
+        wget "https://bitbucket.org/piotrkarbowski/better-initramfs/downloads/askpass.c"
+        gcc -Os -static askpass.c -o ~/.cache/askpass
+        rm askpass.c
+    fi
+    cp ~/.cache/askpass bin/
+fi
 """
 COPY_MODULES = """
 KERNEL=$(readlink /usr/src/linux)
@@ -73,9 +84,9 @@ umask 0077
 [ ! -d /mnt ] && mkdir /mnt
 [ ! -d /new-root ] && mkdir /new-root
 
+mount -t devtmpfs -o nosuid,relatime,size=10240k,mode=755 devtmpfs /dev
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
-mount -t devtmpfs devtmpfs /dev
 
 # clean i/o
 exec >/dev/console </dev/console 2>&1
@@ -147,6 +158,49 @@ for counter in $(seq 3); do
 done
 """
 
+# optional: dropbear script for mounting device. It will use key if present 
+# and interactively prompt for password
+DROPBEAR_SCRIPT = """
+for counter in $(seq 3); do
+    sleep 1
+    $CLEAR
+    for dev in /dev/sd* /dev/nvme*; do
+        if cryptsetup isLuks ${dev}; then
+            if [ $(cryptsetup luksUUID ${dev}) = "${UUID}" ]; then
+                DEVICE=$dev
+                break
+            fi
+        fi
+    done
+    [ -n "${DEVICE}" ] && break
+done
+
+if [ -z "${DEVICE}" ]; then
+    echo "No LUKS device found to boot from! Giving up."
+    exit 1
+fi
+
+if [ ! -b /dev/mapper/root ]; then
+    for i in 0 1 2 ; do
+        askpass 'Enter decryption key: ' |ccrypt -c -k - $KEY | \
+                cryptsetup open --allow-discards $DEVICE root
+        ret=$?
+        [ ${ret} -eq 0 ] && break
+    done
+fi
+if [ ! -b /dev/mapper/root ]; then
+    echo "Failed to open encrypted device $DEVICE"
+    exit 2
+else
+    echo "Successfully opened root device, continue booting."
+fi
+
+# Kill the process for interactively providing password
+if [ ${ret} -eq 0 ]; then
+    killall ccrypt
+fi
+"""
+
 # Open encrypted fs
 INIT_OPEN = """
 for counter in $(seq 3); do
@@ -201,13 +255,28 @@ done
 
 """
 
+DROPBEAR = """\
+mkdir /dev/pts
+mount devpts /dev/pts -t devpts
+
+ifconfig eth0 %(ip)s netmask %(netmask)s up
+route add default gw %(gateway)s eth0
+
+dropbear -s -g -p 22
+"""
+
 DECRYPT_PASSWORD = """
 if [ ! -b /dev/mapper/root ]; then
     for i in 0 1 2 ; do
         ccrypt -c $KEY | cryptsetup open --allow-discards $DEVICE root
-        ret=$?
-        [ ${ret} -eq 0 ] && break
+        if [ -b /dev/mapper/root ]; then
+            break
+        fi
     done
+fi
+if [ ! -b /dev/mapper/root ]; then
+    echo "Failed to open encrypted device. Reboot in 5 seconds."
+    reboot -f -d 5
 fi
 """
 
@@ -230,6 +299,7 @@ exec switch_root /new-root /sbin/init
 class Config:
     defaults = {'copy_modules': False,
                 'disk_label': None,
+                'dropbear': False,
                 'install': False,
                 'key_path': None,
                 'lvm': False,
@@ -265,23 +335,37 @@ class Config:
         # UUID is only available via config file
         self.uuid = toml_.get('uuid')
 
+        # dropbear conf available only via config file
+        self.ip = toml_.get('ip')
+        self.gateway = toml_.get('gateway')
+        self.netmask = toml_.get('netmask')
+        self.authorized_keys = toml_.get('authorized_keys', ROOT_AK)
+
 
 class Initramfs(object):
     def __init__(self, conf):
-        self.lvm = conf.lvm
-        self.yk = conf.yubikey
-        self.name = args.disk
         self.modules = conf.copy_modules
-        self.key_path = conf.key_path
         self.disk_label = conf.disk_label
-        self.sdcard = conf.sdcard
+        self.dropbear = conf.dropbear
         self.install = conf.install
+        self.key_path = conf.key_path
+        self.key = None
+        self.lvm = conf.lvm
         self.no_key = conf.no_key
+        self.sdcard = conf.sdcard
+        self.yk = conf.yubikey
+
+        self.uuid = conf.uuid
+
+        self.ip = conf.ip
+        self.gateway = conf.gateway
+        self.netmask = conf.netmask
+        self.authorized_keys = conf.authorized_keys
 
         self.dirname = None
         self.kernel_ver = os.readlink('/usr/src/linux').replace('linux-', '')
         self._make_tmp()
-        self._disks = conf.drive
+        self._drive = conf.drive
 
     def _make_tmp(self):
         self.dirname = tempfile.mkdtemp(prefix='init_')
@@ -289,7 +373,7 @@ class Initramfs(object):
 
     def _make_dirs(self):
         os.chdir(self.dirname)
-        for dir_ in ('bin', 'dev', 'etc', 'keys', 'lib64', 'proc',
+        for dir_ in ('bin', 'dev', 'etc', 'keys', 'lib64', 'proc', 'root',
                      'run/cryptsetup', 'run/lock', 'sys', 'tmp'):
             os.makedirs(os.path.join(self.dirname, dir_))
 
@@ -306,9 +390,11 @@ class Initramfs(object):
         with open(fname, 'w') as fobj:
             lvm = '/sbin/lvscan\n/sbin/vgchange' if self.lvm else ''
             yubikey = '/usr/bin/ykchalresp' if self.yk else ''
+            dropbear = '/usr/sbin/dropbear' if self.dropbear else ''
             fobj.write(SHEBANG)
-            fobj.write(DEPS % {'lvm': lvm, 'yubikey': yubikey})
-            fobj.write(COPY_DEPS)
+            fobj.write(DEPS % {'lvm': lvm, 'yubikey': yubikey,
+                               'dropbear': dropbear})
+            fobj.write(COPY_DEPS % 'true' if self.dropbear else 'false')
 
         # extra crap, which seems to be needed, but is not direct dependency
         for root, _, fnames in os.walk('/usr/lib'):
@@ -319,11 +405,56 @@ class Initramfs(object):
                 if f.split('.')[0] in additional_libs:
                     shutil.copy(os.path.join(root, f), 'lib64',
                                 follow_symlinks=False)
+        self._copy_dropbear_deps()
 
         os.chmod(fname, 0b111101101)
         subprocess.call([fname])
         os.unlink(fname)
         os.chdir(self.curdir)
+
+    def _copy_dropbear_deps(self):
+        if not self.dropbear:
+            return
+
+        for dir_ in ('root/.ssh', 'etc/dropbear'):
+            os.makedirs(os.path.join(self.dirname, dir_))
+
+        additional_libs = ['libnss_compat', 'libnss_files']
+        for root, _, fnames in os.walk('/lib64'):
+            for f in fnames:
+                if f.split('.')[0] in additional_libs:
+                    shutil.copy(os.path.join(root, f), 'lib64',
+                                follow_symlinks=False)
+
+        shutil.copy('/etc/localtime', 'etc')
+
+        # Copy the authorized keys for your regular user you administrate with
+        if self.authorized_keys and os.path.exists(self.authorized_keys):
+            shutil.copy(self.authorized_keys, 'root/.ssh')
+
+        # Copy OpenSSH's host keys to keep both initramfs' and regular ssh
+        # signed the same otherwise openssh clients will see different host
+        # keys and chicken out. Here we only copy the ecdsa host key, because
+        # ecdsa is default with OpenSSH. For RSA and others, copy adequate
+        # keyfile.
+        subprocess.run(['dropbearconvert', 'openssh', 'dropbear',
+                        '/etc/ssh/ssh_host_ecdsa_key',
+                        'etc/dropbear/dropbear_ecdsa_host_key'])
+
+        # Basic system defaults
+        with open('etc/passwd', 'w') as fobj:
+            fobj.write("root:x:0:0:root:/root:/bin/sh\n")
+        with open('etc/shadow', 'w') as fobj:
+            fobj.write("root:*:::::::\n")
+        with open('etc/group', 'w') as fobj:
+            fobj.write("root:x:0:root\n")
+        with open('etc/shells', 'w') as fobj:
+            fobj.write("/bin/sh\n")
+        os.chmod('etc/shadow', 0b110100000)
+        with open('etc/nsswitch.conf', 'w') as fobj:
+            fobj.write("passwd:  files\n"
+                       "shadow:  files\n"
+                       "group:   files\n")
 
     def _copy_modules(self):
         if not self.modules:
@@ -367,6 +498,7 @@ class Initramfs(object):
             sys.exit(2)
 
         key_path = os.path.abspath(key_path)
+        self.key = os.path.basename(key_path)
         os.chdir(self.dirname)
         shutil.copy2(key_path, 'keys')
         os.chdir(self.curdir)
@@ -389,10 +521,25 @@ class Initramfs(object):
                 fobj.write(DECRYPT_KEYDEV)
             if self.yk:
                 fobj.write(DECRYPT_YUBICP % {'disk': self._drive})
+            if self.dropbear:
+                fobj.write(DROPBEAR % {'ip': self.ip, 'gateway': self.gateway,
+                                       'netmask': self.netmask})
             fobj.write(DECRYPT_PASSWORD)
+            if self.dropbear:
+                fobj.write("killall dropbear\n")
             fobj.write(SWROOT)
 
         os.chmod('init', 0b111101101)
+
+        if self.dropbear:
+            with open('root/decrypt.sh', 'w') as fobj:
+                fobj.write(SHEBANG_ASH)
+                fobj.write(f"UUID='{self.uuid}'\n")
+                if self.key:
+                    fobj.write(f"KEY='/keys/{self.key}'\n")
+                fobj.write(DROPBEAR_SCRIPT)
+            os.chmod('root/decrypt.sh', 0b111101101)
+
         os.chdir(self.curdir)
 
     def _mkcpio_arch(self):
@@ -513,6 +660,9 @@ def main():
                         help='Enable LVM in init.')
     parser.add_argument('-y', '--yubikey', action='store_true',
                         help='Enable Yubikey challenge-response in init.')
+    parser.add_argument('-b', '--dropbear', action='store_true',
+                        help='Enable dropbear ssh server for remotely connect '
+                        'to initrd.')
     parser.add_argument('drive', choices=disks.keys(), help='Drive name')
 
     args = parser.parse_args()

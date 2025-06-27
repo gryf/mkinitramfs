@@ -69,6 +69,11 @@ similar to those passed via commandline. Consider following example:
    key_path = "/full/path/to/the/keys/dir"
    key = "laptop.key"
    yubikey = true
+   dropbear = true
+   ip = '192.168.0.1'
+   gateway = '192.168.0.254'
+   netmask = '24'
+   authorized_keys = "/full/path/to/the/.ssh/authorized_keys"
 
 This will inform mkinitramfs script, that dropbear and yubikey features are
 enabled. Also for network related configuration, there are last three options.
@@ -82,6 +87,7 @@ The complete list of supported options is listed below:
 - ``disk_label``
 - ``sdcard``
 - ``yubikey``
+- ``dropbear``
 
 Using key devices
 -----------------
