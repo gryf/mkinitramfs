@@ -79,9 +79,6 @@ $CLEAR
 export PATH=/bin
 umask 0077
 
-[ ! -d /proc ] && mkdir /proc
-[ ! -d /tmp ] && mkdir /tmp
-[ ! -d /mnt ] && mkdir /mnt
 [ ! -d /new-root ] && mkdir /new-root
 
 mount -t devtmpfs -o nosuid,relatime,size=10240k,mode=755 devtmpfs /dev
@@ -158,7 +155,7 @@ for counter in $(seq 3); do
 done
 """
 
-# optional: dropbear script for mounting device. It will use key if present 
+# optional: dropbear script for mounting device. It will use key if present
 # and interactively prompt for password
 DROPBEAR_SCRIPT = """
 for counter in $(seq 3); do
@@ -323,14 +320,14 @@ class Config:
                 key = os.path.join(KEYS_PATH, key)
             if not os.path.exists(key):
                 sys.stderr.write(f'Cannot find key file for '
-                                 '{toml_.get("key")}.\n')
-                sys.exit(2)
+                                 f'{toml_.get("key")}.\n')
+                sys.exit(5)
             self.key_path = key
 
         if not (self.key_path or self.no_key):
             sys.stderr.write(f'key file for {self.drive} is not provided, '
-                             'while no-key option is not set.\n')
-            sys.exit(2)
+                             f'while no-key option is not set.\n')
+            sys.exit(6)
 
         # UUID is only available via config file
         self.uuid = toml_.get('uuid')
@@ -344,28 +341,11 @@ class Config:
 
 class Initramfs(object):
     def __init__(self, conf):
-        self.modules = conf.copy_modules
-        self.disk_label = conf.disk_label
-        self.dropbear = conf.dropbear
-        self.install = conf.install
-        self.key_path = conf.key_path
+        self.conf = conf
         self.key = None
-        self.lvm = conf.lvm
-        self.no_key = conf.no_key
-        self.sdcard = conf.sdcard
-        self.yk = conf.yubikey
-
-        self.uuid = conf.uuid
-
-        self.ip = conf.ip
-        self.gateway = conf.gateway
-        self.netmask = conf.netmask
-        self.authorized_keys = conf.authorized_keys
-
         self.dirname = None
         self.kernel_ver = os.readlink('/usr/src/linux').replace('linux-', '')
         self._make_tmp()
-        self._drive = conf.drive
 
     def _make_tmp(self):
         self.dirname = tempfile.mkdtemp(prefix='init_')
@@ -388,13 +368,13 @@ class Initramfs(object):
         _fd, fname = tempfile.mkstemp(dir=self.dirname, suffix='.sh')
         os.close(_fd)
         with open(fname, 'w') as fobj:
-            lvm = '/sbin/lvscan\n/sbin/vgchange' if self.lvm else ''
-            yubikey = '/usr/bin/ykchalresp' if self.yk else ''
-            dropbear = '/usr/sbin/dropbear' if self.dropbear else ''
+            lvm = '/sbin/lvscan\n/sbin/vgchange' if self.conf.lvm else ''
+            yubikey = '/usr/bin/ykchalresp' if self.conf.yubikey else ''
+            dropbear = '/usr/sbin/dropbear' if self.conf.dropbear else ''
             fobj.write(SHEBANG)
             fobj.write(DEPS % {'lvm': lvm, 'yubikey': yubikey,
                                'dropbear': dropbear})
-            fobj.write(COPY_DEPS % 'true' if self.dropbear else 'false')
+            fobj.write(COPY_DEPS % 'true' if self.conf.dropbear else 'false')
 
         # extra crap, which seems to be needed, but is not direct dependency
         for root, _, fnames in os.walk('/usr/lib'):
@@ -413,7 +393,7 @@ class Initramfs(object):
         os.chdir(self.curdir)
 
     def _copy_dropbear_deps(self):
-        if not self.dropbear:
+        if not self.conf.dropbear:
             return
 
         for dir_ in ('root/.ssh', 'etc/dropbear'):
@@ -429,8 +409,9 @@ class Initramfs(object):
         shutil.copy('/etc/localtime', 'etc')
 
         # Copy the authorized keys for your regular user you administrate with
-        if self.authorized_keys and os.path.exists(self.authorized_keys):
-            shutil.copy(self.authorized_keys, 'root/.ssh')
+        if (self.conf.authorized_keys and
+            os.path.exists(self.conf.authorized_keys)):
+            shutil.copy(self.conf.authorized_keys, 'root/.ssh')
 
         # Copy OpenSSH's host keys to keep both initramfs' and regular ssh
         # signed the same otherwise openssh clients will see different host
@@ -457,7 +438,7 @@ class Initramfs(object):
                        "group:   files\n")
 
     def _copy_modules(self):
-        if not self.modules:
+        if not self.conf.copy_modules:
             return
         os.chdir(self.dirname)
         os.mkdir(os.path.join('lib', 'modules'))
@@ -488,53 +469,60 @@ class Initramfs(object):
             os.symlink('busybox', command)
 
     def _copy_key(self, suffix=''):
-        key_path = self.key_path
+        key_path = self.conf.key_path
         if not os.path.exists(key_path):
-            key_path = os.path.join(self.key_path + suffix)
+            key_path = os.path.join(self.conf.key_path + suffix)
 
         if not os.path.exists(key_path):
             self._cleanup()
-            sys.stderr.write(f'Cannot find key(s) file for {self._drive}.\n')
+            sys.stderr.write(f'Cannot find key(s) file for '
+                             f'{self.conf.drive}.\n')
             sys.exit(2)
 
         key_path = os.path.abspath(key_path)
-        self.key = os.path.basename(key_path)
         os.chdir(self.dirname)
         shutil.copy2(key_path, 'keys')
         os.chdir(self.curdir)
+        if not (suffix or self.key):
+            # set self.key only when:
+            # - there is no key set to self
+            # - suffix is empty
+            # so that we could get the key name calculated for the yk
+            self.key = os.path.basename(key_path)
 
     def _generate_init(self):
         os.chdir(self.dirname)
         with open('init', 'w') as fobj:
             fobj.write(SHEBANG_ASH)
-            fobj.write(f"UUID='{self.uuid}'\n")
+            fobj.write(f"UUID='{self.conf.uuid}'\n")
             if self.key:
                 fobj.write(f"KEY='/keys/{self.key}'\n")
             fobj.write(INIT)
             fobj.write(INIT_CMD)
-            if self.disk_label:
-                fobj.write(INIT_LABELED % {'label': self.disk_label})
-            if self.sdcard:
+            if self.conf.disk_label:
+                fobj.write(INIT_LABELED % {'label': self.conf.disk_label})
+            if self.conf.sdcard:
                 fobj.write(INIT_SD)
             fobj.write(INIT_OPEN)
-            if self.disk_label or self.sdcard:
+            if self.conf.disk_label or self.conf.sdcard:
                 fobj.write(DECRYPT_KEYDEV)
-            if self.yk:
-                fobj.write(DECRYPT_YUBICP % {'disk': self._drive})
-            if self.dropbear:
-                fobj.write(DROPBEAR % {'ip': self.ip, 'gateway': self.gateway,
-                                       'netmask': self.netmask})
+            if self.conf.yubikey:
+                fobj.write(DECRYPT_YUBICP % {'disk': self.conf.drive})
+            if self.conf.dropbear:
+                fobj.write(DROPBEAR % {'ip': self.conf.ip,
+                                       'gateway': self.conf.gateway,
+                                       'netmask': self.conf.netmask})
             fobj.write(DECRYPT_PASSWORD)
-            if self.dropbear:
+            if self.conf.dropbear:
                 fobj.write("killall dropbear\n")
             fobj.write(SWROOT)
 
         os.chmod('init', 0b111101101)
 
-        if self.dropbear:
+        if self.conf.dropbear:
             with open('root/decrypt.sh', 'w') as fobj:
                 fobj.write(SHEBANG_ASH)
-                fobj.write(f"UUID='{self.uuid}'\n")
+                fobj.write(f"UUID='{self.conf.uuid}'\n")
                 if self.key:
                     fobj.write(f"KEY='/keys/{self.key}'\n")
                 fobj.write(DROPBEAR_SCRIPT)
@@ -558,7 +546,7 @@ class Initramfs(object):
 
         os.chmod(self.cpio_arch, 0b110100100)
 
-        if self.install:
+        if self.conf.install:
             self._make_boot_links()
         else:
             shutil.move(self.cpio_arch, 'initramfs.cpio')
@@ -598,9 +586,9 @@ class Initramfs(object):
         self._copy_modules()
         # self._copy_wlan_modules()
         self._populate_busybox()
-        if not self.no_key:
+        if not self.conf.no_key:
             self._copy_key()
-        if self.yk:
+        if self.conf.yubikey:
             self._copy_key('.yk')
         self._generate_init()
         self._mkcpio_arch()
