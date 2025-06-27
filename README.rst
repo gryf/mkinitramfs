@@ -73,6 +73,7 @@ similar to those passed via commandline. Consider following example:
    ip = '192.168.0.1'
    gateway = '192.168.0.254'
    netmask = '24'
+   user = 'gryf'
    authorized_keys = "/full/path/to/the/.ssh/authorized_keys"
 
 This will inform mkinitramfs script, that dropbear and yubikey features are
@@ -88,6 +89,7 @@ The complete list of supported options is listed below:
 - ``sdcard``
 - ``yubikey``
 - ``dropbear``
+- ``user``
 
 Using key devices
 -----------------
@@ -104,7 +106,34 @@ There is possibility for using key which is encrypted using response from
 challenge response using `ykchalresp`_ command. The challenge here could be
 any string, so the name of the device from config is used.
 
+Dropbear
+--------
+
+To unlock LUKS root filesystem remotely `dropbear`_ is used. There are expected
+configuration options in ``mkinitramfs.toml`` file:
+
+- ``dropbear`` - true or false, false by default
+- ``iface`` interface name - ``eth0`` by default
+- ``ip`` - static IP address
+- ``netmask`` - netmask for the network
+- ``gateway`` - gateway for the network
+- ``user`` - username used for logging in, ``root`` by default. Note, whatever
+  username will be placed here, it will be ``root`` effectively anyway
+- ``authorized_keys`` - path to ssh ``authorized_keys`` file. If there is no
+  user set - which mens root username is used, by default it will look for the
+  ``/root/.ssh/authorized_keys``
+
+You'll need to put at least ``ip``, ``netmask``, ``gateway`` to make this work
+with defaults, with assumption that interface is ``eth0`` and ``root`` user
+have needed ``authorized_keys`` file.
+
+Then execute script with flag ``-b`` which include dropbear part.:
+
+.. code:: shell-session
+
+   # mkinitramfs.py -b laptop
 
 .. _ccrypt: https://sourceforge.net/projects/ccrypt/
 .. _cryptsetup: https://gitlab.com/cryptsetup/cryptsetup/blob/master/README.md
 .. _ykchalresp: https://github.com/Yubico/yubikey-personalization
+.. _dropbear: https://matt.ucc.asn.au/dropbear/dropbear.html

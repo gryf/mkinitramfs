@@ -272,7 +272,7 @@ if [ ! -b /dev/mapper/root ]; then
     done
 fi
 if [ ! -b /dev/mapper/root ]; then
-    echo "Failed to open encrypted device. Reboot in 5 seconds."
+    echo "Failed to open encrypted device. Rebooting in 5 seconds."
     reboot -f -d 5
 fi
 """
@@ -336,6 +336,14 @@ class Config:
         self.ip = toml_.get('ip')
         self.gateway = toml_.get('gateway')
         self.netmask = toml_.get('netmask')
+        self.iface =  toml_.get('iface', 'eth0')
+        self.user = toml_.get('user', 'root')
+        if self.user != 'root' and not toml_.get('authorized_keys'):
+            sys.stderr.write(f'User {self.user} is not authorized for '
+                             f'utilizing root .ssh/authorized_keys file. '
+                             f'Set authorized_keys file path in'
+                             f' configuration.')
+            sys.exit(7)
         self.authorized_keys = toml_.get('authorized_keys', ROOT_AK)
 
 
@@ -412,6 +420,8 @@ class Initramfs(object):
         if (self.conf.authorized_keys and
             os.path.exists(self.conf.authorized_keys)):
             shutil.copy(self.conf.authorized_keys, 'root/.ssh')
+        else:
+            sys.stderr.write(f'Warning {self.conf.authorized_keys} not found!')
 
         # Copy OpenSSH's host keys to keep both initramfs' and regular ssh
         # signed the same otherwise openssh clients will see different host
@@ -424,11 +434,11 @@ class Initramfs(object):
 
         # Basic system defaults
         with open('etc/passwd', 'w') as fobj:
-            fobj.write("root:x:0:0:root:/root:/bin/sh\n")
+            fobj.write(f"{self.conf.user}:x:0:0:root:/root:/bin/sh\n")
         with open('etc/shadow', 'w') as fobj:
-            fobj.write("root:*:::::::\n")
+            fobj.write(f"{self.conf.user}:*:::::::\n")
         with open('etc/group', 'w') as fobj:
-            fobj.write("root:x:0:root\n")
+            fobj.write(f"{self.conf.user}:x:0:{self.conf.user}\n")
         with open('etc/shells', 'w') as fobj:
             fobj.write("/bin/sh\n")
         os.chmod('etc/shadow', 0b110100000)
@@ -469,9 +479,7 @@ class Initramfs(object):
             os.symlink('busybox', command)
 
     def _copy_key(self, suffix=''):
-        key_path = self.conf.key_path
-        if not os.path.exists(key_path):
-            key_path = os.path.join(self.conf.key_path + suffix)
+        key_path = self.conf.key_path + suffix
 
         if not os.path.exists(key_path):
             self._cleanup()
