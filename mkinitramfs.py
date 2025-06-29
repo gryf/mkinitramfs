@@ -84,8 +84,13 @@ umask 0077
 mount -t devtmpfs -o nosuid,relatime,size=10240k,mode=755 devtmpfs /dev
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
+mount -t configfs none /sys/kernel/config
+mount -t debugfs none /sys/kernel/debug
 
-# clean i/o
+# do not let kernel spill its messages to the console
+echo 0 > /proc/sys/kernel/printk
+
+# clean console i/o
 exec >/dev/console </dev/console 2>&1
 
 # tty fix
@@ -124,7 +129,7 @@ done
 # be carefull, which disk you select to write.
 INIT_SD = """
 for counter in $(seq 5); do
-    clear
+    $CLEAR
     if [ -b /dev/mmcblk0p1 ]; then
         KEYDEV=/dev/mmcblk0p1
         break
@@ -143,8 +148,7 @@ done
 # off.
 INIT_LABELED = """
 for counter in $(seq 3); do
-    sleep 1
-    clear
+    $CLEAR
     for dev in /dev/sd* /dev/mmcblk*; do
         if blkid "${dev}" | grep -w LABEL | grep -iqw "%(label)s"; then
             KEYDEV="${dev}"
@@ -152,6 +156,7 @@ for counter in $(seq 3); do
         fi
     done
     [ -n "${KEYDEV}" ] && break
+    sleep 1
 done
 """
 
@@ -159,7 +164,6 @@ done
 # and interactively prompt for password
 DROPBEAR_SCRIPT = """
 for counter in $(seq 3); do
-    sleep 1
     $CLEAR
     for dev in /dev/sd* /dev/nvme*; do
         if cryptsetup isLuks ${dev}; then
@@ -170,6 +174,7 @@ for counter in $(seq 3); do
         fi
     done
     [ -n "${DEVICE}" ] && break
+    sleep 1
 done
 
 if [ -z "${DEVICE}" ]; then
@@ -201,7 +206,6 @@ fi
 # Open encrypted fs
 INIT_OPEN = """
 for counter in $(seq 3); do
-    sleep 1
     $CLEAR
     for dev in /dev/sd* /dev/nvme*; do
         if cryptsetup isLuks ${dev}; then
@@ -212,12 +216,12 @@ for counter in $(seq 3); do
         fi
     done
     [ -n "${DEVICE}" ] && break
+    sleep 1
 done
 
 if [ -z "${DEVICE}" ]; then
     echo "No LUKS device found to boot from! Giving up."
-    sleep 3
-    exec reboot -f
+    exec reboot -f -d 3
 fi
 """
 
@@ -234,8 +238,7 @@ fi
 
 if [[ ${ret} -ne 0 && ! -f ${KEY} ]]; then
     echo "Failed to open boot system fs. Giving up."
-    sleep 3
-    reboot -f
+    reboot -f -d 3
 fi
 """
 
@@ -243,7 +246,7 @@ DECRYPT_YUBICP = """
 for i in 1 2 3 4 5 6; do
     pass=$(ykchalresp %(disk)s 2>/dev/null)
     if [ -n "$pass" ]; then
-        ccrypt -K $pass -c "$KEY.yk" | \
+        echo "$pass" | ccrypt -c -k - "$KEY.yk" | \
                 cryptsetup open --allow-discards $DEVICE root
         break
     fi
@@ -347,7 +350,7 @@ class Config:
         self.authorized_keys = toml_.get('authorized_keys', ROOT_AK)
 
 
-class Initramfs(object):
+class Initramfs:
     def __init__(self, conf):
         self.conf = conf
         self.key = None
