@@ -125,7 +125,9 @@ configuration options in ``mkinitramfs.toml`` file:
 
 You'll need to put at least ``ip``, ``netmask``, ``gateway`` to make this work
 with defaults, with assumption that interface is ``eth0`` and ``root`` user
-have needed ``authorized_keys`` file.
+have needed ``authorized_keys`` file. There is also ``askpass.c`` which origins
+from `better-initramfs`_ project, included in this repository just for
+preservation purposes.
 
 Then execute script with flag ``-b`` which include dropbear part.:
 
@@ -137,3 +139,4 @@ Then execute script with flag ``-b`` which include dropbear part.:
 .. _cryptsetup: https://gitlab.com/cryptsetup/cryptsetup/blob/master/README.md
 .. _ykchalresp: https://github.com/Yubico/yubikey-personalization
 .. _dropbear: https://matt.ucc.asn.au/dropbear/dropbear.html
+.. _better-initramfs: https://bitbucket.org/piotrkarbowski/better-initramfs
