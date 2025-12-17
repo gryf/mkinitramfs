@@ -50,7 +50,12 @@ done
 
 if %s; then
     if [ ! -f ~/.cache/askpass ]; then
-        wget "https://bitbucket.org/piotrkarbowski/better-initramfs/downloads/askpass.c"
+        if ! wget "https://bitbucket.org/piotrkarbowski/better-initramfs/downloads/askpass.c"; then
+            if ! wget "https://raw.githubusercontent.com/gryf/mkinitramfs/refs/heads/master/askpass.c"; then
+                echo "Error: Unable to fetch the 'askpass.c'. Aborting" >&2
+                exit 1
+            fi
+        fi
         gcc -Os -static askpass.c -o ~/.cache/askpass
         rm askpass.c
     fi
