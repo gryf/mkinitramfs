@@ -390,7 +390,7 @@ class Initramfs:
             fobj.write(SHEBANG)
             fobj.write(DEPS % {'lvm': lvm, 'yubikey': yubikey,
                                'dropbear': dropbear})
-            fobj.write(COPY_DEPS % 'true' if self.conf.dropbear else 'false')
+            fobj.write(COPY_DEPS % ('true' if self.conf.dropbear else 'false'))
 
         # extra crap, which seems to be needed, but is not direct dependency
         for root, _, fnames in os.walk('/usr/lib'):
