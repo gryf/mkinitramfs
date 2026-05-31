@@ -170,7 +170,7 @@ done
 DROPBEAR_SCRIPT = """
 for counter in $(seq 3); do
     $CLEAR
-    for dev in /dev/sd* /dev/nvme*; do
+    for dev in /dev/sd* /dev/nvme* /dev/mmcblk*; do
         if cryptsetup isLuks ${dev}; then
             if [ $(cryptsetup luksUUID ${dev}) = "${UUID}" ]; then
                 DEVICE=$dev
@@ -212,7 +212,7 @@ fi
 INIT_OPEN = """
 for counter in $(seq 3); do
     $CLEAR
-    for dev in /dev/sd* /dev/nvme*; do
+    for dev in /dev/sd* /dev/nvme* /dev/mmcblk*; do
         if cryptsetup isLuks ${dev}; then
             if [ $(cryptsetup luksUUID ${dev}) = "${UUID}" ]; then
                 DEVICE=$dev
